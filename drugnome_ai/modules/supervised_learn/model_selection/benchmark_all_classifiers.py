@@ -29,6 +29,8 @@ from drugnome_ai.modules.supervised_learn.classifiers.ensemble_lib import ensemb
 from drugnome_ai.modules.supervised_learn.classifiers.ensemble_stacking import EnsembleClassifier
 from drugnome_ai.modules.supervised_learn.classifiers.sklearn_extended_classifier import SklearnExtendedClassifier
 
+import shap
+
 sklearn_extended_classifiers = ['RandomForestClassifier', 'ExtraTreesClassifier', 'GradientBoostingClassifier', 'SVC', 'XGBoost']
 feature_imp_classifiers = ['RandomForestClassifier', 'ExtraTreesClassifier', 'GradientBoostingClassifier', 'XGBoost'] #for Stacking: redundant
 
@@ -285,6 +287,30 @@ def run_pu_learning(train_dfs, test_dfs, train_test_indexes, clf_id, max_workers
     return auc_score_list, fpr_tpr_lists, all_roc_data
 
 
+def generate_shap_summary(model, X_train, X_test, clf_id, output_dir):
+    """
+    Generate and save SHAP summary plot for the given model.
+    Parameters:
+        model: Trained model.
+        X_train: Training data used to fit the explainer.
+        X_test: Test data for SHAP value computation.
+        clf_id: Identifier for the classifier.
+        output_dir: Directory to save the plot.
+    """
+    # Create SHAP explainer
+    explainer = shap.Explainer(model, X_train)
+    shap_values = explainer(X_test)
+    
+    # Generate summary plot
+    plt.figure()
+    shap.summary_plot(shap_values, X_test, show=False)
+    plt.title(f"SHAP Summary for {clf_id}")
+    
+    # Save plot to output directory
+    shap_plot_path = str(output_dir / f"{clf_id}.SHAP_summary.png")
+    plt.savefig(shap_plot_path, bbox_inches='tight')
+    plt.close()
+    print(f"SHAP summary plot saved to {shap_plot_path}")
 
 
 def plot_aggregate_roc_curves(all_clf, fpr_tpr_dict, auc_scores_dict, overlap_plots=True):
@@ -490,81 +516,83 @@ if __name__ == '__main__':
 
     out_dir = sys.argv[1]
     cfg = Config(out_dir)
-    iterations = int(sys.argv[2]) #10 
+    iterations = int(sys.argv[2])  # typically 10
 
     # Total datasets to run for benchmarking:
     # cfg.kfold * iterations -- typically 100
 
-
     # ======= Parameters for Benchmarking =======
     create_reproducible_train_test_sets = True
     read_reproducible_train_test_sets = True
-
-    max_workers = 10 #100 #cfg.kfold * iterations
-   # ============================================
-
+    max_workers = 10  # 100 #cfg.kfold * iterations
+    # ============================================
 
     static_partition_dir = 'reproducible_partition_pickle_files'
-    
+
     auc_scores_dict = {}
     fpr_tpr_dict = {}
     all_roc_data_dict = {}
 
-    all_clf = ['Stacking_DNN', 'DNN', 'ExtraTreesClassifier', 'RandomForestClassifier', 'GradientBoostingClassifier', 'SVC', 'XGBoost']
-    #all_clf = ['DNN', 'ExtraTreesClassifier', 'RandomForestClassifier', 'GradientBoostingClassifier', 'SVC', 'XGBoost']
-    clf_colors = {'ExtraTreesClassifier': '#33a02c', 'RandomForestClassifier': '#1f78b4', 
-                  'GradientBoostingClassifier': '#e31a1c', 'SVC': '#6a3d9a', 'XGBoost': '#ff7f00',
-                  'DNN': '#67001f', 'Stacking_DNN': '#252525', 'Stacking_XGBoost': '#ae017e'}
+    all_clf = [
+        'Stacking_DNN', 'DNN', 'ExtraTreesClassifier', 
+        'RandomForestClassifier', 'GradientBoostingClassifier', 
+        'SVC', 'XGBoost'
+    ]
 
+    clf_colors = {
+        'ExtraTreesClassifier': '#33a02c', 'RandomForestClassifier': '#1f78b4',
+        'GradientBoostingClassifier': '#e31a1c', 'SVC': '#6a3d9a', 
+        'XGBoost': '#ff7f00', 'DNN': '#67001f', 
+        'Stacking_DNN': '#252525', 'Stacking_XGBoost': '#ae017e'
+    }
 
-    
     if create_reproducible_train_test_sets:
         store_reproducible_partitioning_lists()
-        #sys.exit('Stored reproducible train/test sets into pikcle files under ' + static_partition_dir)
 
     if read_reproducible_train_test_sets:
         train_dfs, test_dfs, train_test_indexes, stacking_train_dfs, stacking_test_dfs, stacking_train_test_indexes = read_reproducible_partitioning_lists()
-        print('Read reproducible train/test sets from pikcle files under ' + static_partition_dir)
-
-        print(len(train_test_indexes))
-
+        print('Read reproducible train/test sets from pickle files under ' + static_partition_dir)
     else:
-        print('Retrieving random balanced datasets with Stratified k-fold... (for use with all classifiers except for Stacking)')
-        # ----  Create random balanced datasets with Stratified k-fold to be used by all classifiers except 'Stacking' ----
         train_dfs, test_dfs, train_test_indexes = get_consistent_balanced_datasets(stratified_kfold=True)
-        # -----------------------------------------------------------------------------------------------------------------
-
-        print('Retrieving random balanced datasets for Stacking without Stratified k-fold...(for use with Stacking classifiers)')
-        # ----  Create random balanced datasets without stratified k-fold to be used by Stacking only ----
         stacking_train_dfs, stacking_test_dfs, stacking_train_test_indexes = get_consistent_balanced_datasets(stratified_kfold=False)
-        # ------------------------------------------------------------------------------------------------
-
-
 
     for clf_id in all_clf:
-
         auc_score_list, fpr_tpr_lists, all_roc_data = None, None, None
-   
+        trained_model, X_train, X_test = None, None, None  # Initialize variables for SHAP
+
         if clf_id.startswith('Stacking'):
             final_level_classifier = clf_id.replace('Stacking_', '')
-            selected_base_classifiers = ['ExtraTreesClassifier', 'RandomForestClassifier', 'GradientBoostingClassifier', 'SVC']
+            selected_base_classifiers = [
+                'ExtraTreesClassifier', 'RandomForestClassifier',
+                'GradientBoostingClassifier', 'SVC'
+            ]
 
             train_dfs, test_dfs, train_test_indexes = stacking_train_dfs, stacking_test_dfs, stacking_train_test_indexes
 
-            auc_score_list, fpr_tpr_lists, all_roc_data = run_pu_learning(train_dfs, test_dfs, train_test_indexes, 
-                                                                          clf_id, max_workers, iterations,
-                                                                          selected_base_classifiers=selected_base_classifiers,
-                                                                          final_level_classifier=final_level_classifier)
+            auc_score_list, fpr_tpr_lists, all_roc_data = run_pu_learning(
+                train_dfs, test_dfs, train_test_indexes, 
+                clf_id, max_workers, iterations,
+                selected_base_classifiers=selected_base_classifiers,
+                final_level_classifier=final_level_classifier
+            )
+            # Assign trained model and data (add logic to get these from `run_pu_learning` for Stacking)
         else:
-            auc_score_list, fpr_tpr_lists, all_roc_data = run_pu_learning(train_dfs, test_dfs, train_test_indexes, clf_id, max_workers, iterations)
-    
+            auc_score_list, fpr_tpr_lists, all_roc_data, trained_model, X_train, X_test = run_pu_learning(
+                train_dfs, test_dfs, train_test_indexes, 
+                clf_id, max_workers, iterations
+            )
+
         auc_scores_dict[clf_id] = auc_score_list
         fpr_tpr_dict[clf_id] = fpr_tpr_lists
-        all_roc_data_dict[clf_id] = all_roc_data            
+        all_roc_data_dict[clf_id] = all_roc_data
 
+        # Generate SHAP summary plot
+        if trained_model and X_train is not None and X_test is not None:
+            try:
+                generate_shap_summary(trained_model, X_train, X_test, clf_id, cfg.benchmark_out)
+            except Exception as e:
+                print(f"Failed to generate SHAP summary for {clf_id}: {e}")
 
-    # - overlap_plots = True: plot smooth ROC curves from all classifiers in same plot
-    #                   False: plot ROC curves for each fold and smooth ROC curve for each classifier in separate file
-    plot_aggregate_roc_curves(all_clf, fpr_tpr_dict, auc_scores_dict, overlap_plots=True) 
-    plot_aggregate_roc_curves(all_clf, fpr_tpr_dict, auc_scores_dict, overlap_plots=False)
-
+# Plot ROC curves
+plot_aggregate_roc_curves(all_clf, fpr_tpr_dict, auc_scores_dict, overlap_plots=True)
+plot_aggregate_roc_curves(all_clf, fpr_tpr_dict, auc_scores_dict, overlap_plots=False)

@@ -42,6 +42,33 @@ class ProcessGenericFeatures:
     def __init__(self, cfg):
         self.cfg = cfg
 
+    def process_user_data_function(self, save_to_file=False):
+        '''
+        Process user_data Features
+        :return: user_data_functions_df
+
+        Manually add an "extra_data" folder with your features ("extra_user_data.csv")
+        '''
+        print("\n>> Compiling user_data Features...")
+
+        # Load the dataset
+        user_data_function_df = pd.read_csv(self.cfg.data_dir / 'extra_data/extra_user_data.csv')
+
+        # Ensure it only keeps the relevant columns (assuming 'Gene_Name' is the key column)
+        if 'Gene_Name' not in user_data_function_df.columns:
+            raise ValueError("The user_data Features dataset must contain a 'Gene_Name' column.")
+
+        print(user_data_function_df.shape)
+
+        # Rename columns for consistency
+        user_data_function_df.columns = ['user_dataFeatures_' + col if col != 'Gene_Name' else col for col in user_data_function_df.columns]
+
+        if save_to_file:
+            user_data_function_df.to_csv(self.cfg.data_dir / 'extra_data/extra_user_data.csv',  index=None)
+
+        return user_data_function_df
+
+
     def process_exac(self, save_to_file=False):
         '''
         Process ExAC features
@@ -307,6 +334,10 @@ class ProcessGenericFeatures:
         if hasattr(self.cfg, 'mantis_data_option'):
 
             generic_mantis_datasets = []
+
+            user_data_function_df = self.process_hf_function()
+            generic_mantis_datasets.append(user_data_function_df)
+            print('HF Features:', user_data_function_df.shape)
 
             exac_df = self.process_exac()
             generic_mantis_datasets.append(exac_df)
